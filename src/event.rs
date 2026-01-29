@@ -160,6 +160,51 @@ pub enum TouchPhase {
     Cancelled,
 }
 
+/// Pen input data with pressure, tilt, and other stylus-specific information
+#[derive(Debug, Copy, Clone)]
+pub struct PenInput {
+    pub x: f32,
+    pub y: f32,
+    /// Pressure from 0.0 to 1.0
+    pub pressure: f32,
+    /// Tilt along X axis in degrees (-90.0 to 90.0)
+    pub tilt_x: f32,
+    /// Tilt along Y axis in degrees (-90.0 to 90.0)
+    pub tilt_y: f32,
+    /// Distance from surface (0.0 = touching, higher = further away)
+    pub distance: f32,
+    /// Rotation/twist of the pen in degrees (0.0 to 360.0)
+    pub rotation: f32,
+}
+
+/// Pen tool types
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum PenToolType {
+    Pen,
+    Eraser,
+    Brush,
+    Pencil,
+    Airbrush,
+    Mouse,
+    Lens,
+    Unknown,
+}
+
+/// Pen event phases
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+pub enum PenPhase {
+    /// Pen entered proximity (hovering)
+    Proximity,
+    /// Pen tip touched the surface
+    Down,
+    /// Pen moved while in proximity or touching
+    Move,
+    /// Pen tip lifted from surface
+    Up,
+    /// Pen left proximity
+    Leave,
+}
+
 /// A trait defining event callbacks.
 pub trait EventHandler {
     /// On most platforms update() and draw() are called each frame, sequentially,
@@ -231,4 +276,33 @@ pub trait EventHandler {
     /// `ctx.dropped_file_path()`, and for wasm targets the file bytes
     /// can be requested with `ctx.dropped_file_bytes()`.
     fn files_dropped_event(&mut self) {}
+
+    /// Pen input event with pressure, tilt and other stylus data
+    /// Default implementation treats pen as mouse input
+    fn pen_input_event(&mut self, phase: PenPhase, tool_type: PenToolType, pen_data: PenInput) {
+        match phase {
+            PenPhase::Down => {
+                let button = if tool_type == PenToolType::Eraser {
+                    MouseButton::Right
+                } else {
+                    MouseButton::Left
+                };
+                self.mouse_button_down_event(button, pen_data.x, pen_data.y);
+            }
+            PenPhase::Up => {
+                let button = if tool_type == PenToolType::Eraser {
+                    MouseButton::Right
+                } else {
+                    MouseButton::Left
+                };
+                self.mouse_button_up_event(button, pen_data.x, pen_data.y);
+            }
+            PenPhase::Move | PenPhase::Proximity => {
+                self.mouse_motion_event(pen_data.x, pen_data.y);
+            }
+            PenPhase::Leave => {
+                // Default: no action on pen leave
+            }
+        }
+    }
 }

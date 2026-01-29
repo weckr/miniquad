@@ -53,6 +53,9 @@ pub struct X11Display {
     cursor_visible: bool,
     update_requested: bool,
     drag_n_drop: drag_n_drop::X11DnD,
+    tablet_devices: Vec<xi_input::TabletDevice>,
+    pen_in_proximity: bool,
+    last_pen_device_id: i32,
 }
 
 impl X11Display {
@@ -229,9 +232,126 @@ impl X11Display {
 
             // GenericEvent
             35 if Some(event.xcookie.extension) == self.libxi.xi_extension_opcode => {
-                if event.xcookie.evtype == xi_input::XI_RawMotion {
-                    let (dx, dy) = self.libxi.read_cookie(&mut event.xcookie, self.display);
-                    event_handler.raw_mouse_motion(dx as f32, dy as f32);
+                match event.xcookie.evtype {
+                    xi_input::XI_RawMotion => {
+                        let (dx, dy) = self.libxi.read_cookie(&mut event.xcookie, self.display);
+                        event_handler.raw_mouse_motion(dx as f32, dy as f32);
+                    }
+                    xi_input::XI_Motion => {
+                        if let Some(device_event) = self
+                            .libxi
+                            .read_device_event(&mut event.xcookie, self.display)
+                        {
+                            // Check if this is a tablet device
+                            if let Some(tablet_device) = self
+                                .tablet_devices
+                                .iter()
+                                .find(|d| d.device_id == device_event.sourceid)
+                            {
+                                let pen_data = tablet_device.extract_pen_data(&device_event);
+                                let tool_type = tablet_device.get_tool_type();
+
+                                let phase = if self.pen_in_proximity {
+                                    crate::event::PenPhase::Move
+                                } else {
+                                    crate::event::PenPhase::Proximity
+                                };
+
+                                event_handler.pen_input_event(phase, tool_type, pen_data);
+                            }
+                        }
+                    }
+                    xi_input::XI_ButtonPress => {
+                        if let Some(device_event) = self
+                            .libxi
+                            .read_device_event(&mut event.xcookie, self.display)
+                        {
+                            // Check if this is a tablet device
+                            if let Some(tablet_device) = self
+                                .tablet_devices
+                                .iter()
+                                .find(|d| d.device_id == device_event.sourceid)
+                            {
+                                let pen_data = tablet_device.extract_pen_data(&device_event);
+                                let tool_type = tablet_device.get_tool_type();
+
+                                self.pen_in_proximity = true;
+                                self.last_pen_device_id = device_event.sourceid;
+                                event_handler.pen_input_event(
+                                    crate::event::PenPhase::Down,
+                                    tool_type,
+                                    pen_data,
+                                );
+                            }
+                        }
+                    }
+                    xi_input::XI_ButtonRelease => {
+                        if let Some(device_event) = self
+                            .libxi
+                            .read_device_event(&mut event.xcookie, self.display)
+                        {
+                            // Check if this is a tablet device
+                            if let Some(tablet_device) = self
+                                .tablet_devices
+                                .iter()
+                                .find(|d| d.device_id == device_event.sourceid)
+                            {
+                                let pen_data = tablet_device.extract_pen_data(&device_event);
+                                let tool_type = tablet_device.get_tool_type();
+                                event_handler.pen_input_event(
+                                    crate::event::PenPhase::Up,
+                                    tool_type,
+                                    pen_data,
+                                );
+                            }
+                        }
+                    }
+                    xi_input::XI_Enter => {
+                        if let Some(device_event) = self
+                            .libxi
+                            .read_device_event(&mut event.xcookie, self.display)
+                        {
+                            // Check if this is a tablet device
+                            if let Some(tablet_device) = self
+                                .tablet_devices
+                                .iter()
+                                .find(|d| d.device_id == device_event.sourceid)
+                            {
+                                let pen_data = tablet_device.extract_pen_data(&device_event);
+                                let tool_type = tablet_device.get_tool_type();
+                                self.pen_in_proximity = true;
+                                self.last_pen_device_id = device_event.sourceid;
+                                event_handler.pen_input_event(
+                                    crate::event::PenPhase::Proximity,
+                                    tool_type,
+                                    pen_data,
+                                );
+                            }
+                        }
+                    }
+                    xi_input::XI_Leave => {
+                        if let Some(device_event) = self
+                            .libxi
+                            .read_device_event(&mut event.xcookie, self.display)
+                        {
+                            // Check if this is a tablet device
+                            if let Some(tablet_device) = self
+                                .tablet_devices
+                                .iter()
+                                .find(|d| d.device_id == device_event.sourceid)
+                            {
+                                let pen_data = tablet_device.extract_pen_data(&device_event);
+                                let tool_type = tablet_device.get_tool_type();
+                                self.pen_in_proximity = false;
+                                event_handler.pen_input_event(
+                                    crate::event::PenPhase::Leave,
+                                    tool_type,
+                                    pen_data,
+                                );
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -449,6 +569,12 @@ where
             .libx11
             .create_window(display.root, display.display, visual, depth, conf);
 
+    // Initialize XI extension and query tablet devices after window creation
+    display.tablet_devices =
+        display
+            .libxi
+            .query_xi_extension(&mut display.libx11, display.display, display.window);
+
     let (glx_context, glx_window) = glx.create_context(display.display, display.window);
     glx.swap_interval(
         display.display,
@@ -542,6 +668,12 @@ where
         display
             .libx11
             .create_window(display.root, display.display, std::ptr::null_mut(), 0, conf);
+
+    // Initialize XI extension and query tablet devices after window creation
+    display.tablet_devices =
+        display
+            .libxi
+            .query_xi_extension(&mut display.libx11, display.display, display.window);
 
     let (context, config, egl_display) = egl::create_egl_context(
         &mut egl_lib,
@@ -666,7 +798,7 @@ where
         (libx11.XkbSetDetectableAutoRepeat)(x11_display, true as _, std::ptr::null_mut());
 
         libx11.load_extensions(x11_display);
-        let mut display = X11Display {
+        let display = X11Display {
             empty_cursor: x_cursor::create_empty_cursor(x11_display, x11_root, &mut libx11),
             display: x11_display,
             root: x11_root,
@@ -680,11 +812,10 @@ where
             drag_n_drop: Default::default(),
             cursor_icon: CursorIcon::Default,
             cursor_visible: true,
+            tablet_devices: Vec::new(),
+            pen_in_proximity: false,
+            last_pen_device_id: -1,
         };
-
-        display
-            .libxi
-            .query_xi_extension(&mut display.libx11, display.display);
 
         match conf.platform.linux_x11_gl {
             crate::conf::LinuxX11Gl::GLXOnly => {
