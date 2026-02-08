@@ -11,8 +11,12 @@ mod xi_input;
 
 use crate::{
     event::EventHandler,
-    native::{egl, gl, module, NativeDisplayData, Request},
-    CursorIcon,
+    native::{
+        egl, gl,
+        linux_x11::xi_input::{TabletDevice, XIDeviceEvent},
+        module, NativeDisplayData, Request,
+    },
+    CursorIcon, PenInput, PenToolType,
 };
 
 use libx11::*;
@@ -55,6 +59,8 @@ pub struct X11Display {
     drag_n_drop: drag_n_drop::X11DnD,
     tablet_devices: Vec<xi_input::TabletDevice>,
     pen_in_proximity: bool,
+    pen_down: bool,
+    mouse_down: bool,
     last_pen_device_id: i32,
 }
 
@@ -232,6 +238,22 @@ impl X11Display {
 
             // GenericEvent
             35 if Some(event.xcookie.extension) == self.libxi.xi_extension_opcode => {
+                fn try_get_tablet(
+                    display: &mut X11Display,
+                    device_event: XIDeviceEvent,
+                ) -> Option<(PenInput, PenToolType)> {
+                    if let Some(tablet_device) = display
+                        .tablet_devices
+                        .iter()
+                        .find(|d| d.device_id == device_event.sourceid)
+                    {
+                        let pen_data = unsafe { tablet_device.extract_pen_data(&device_event) };
+                        let tool_type = tablet_device.get_tool_type();
+                        Some((pen_data, tool_type))
+                    } else {
+                        None
+                    }
+                }
                 match event.xcookie.evtype {
                     xi_input::XI_RawMotion => {
                         let (dx, dy) = self.libxi.read_cookie(&mut event.xcookie, self.display);
@@ -243,14 +265,8 @@ impl X11Display {
                             .read_device_event(&mut event.xcookie, self.display)
                         {
                             // Check if this is a tablet device
-                            if let Some(tablet_device) = self
-                                .tablet_devices
-                                .iter()
-                                .find(|d| d.device_id == device_event.sourceid)
+                            if let Some((pen_data, tool_type)) = try_get_tablet(self, device_event)
                             {
-                                let pen_data = tablet_device.extract_pen_data(&device_event);
-                                let tool_type = tablet_device.get_tool_type();
-
                                 let phase = if self.pen_in_proximity {
                                     crate::event::PenPhase::Move
                                 } else {
@@ -259,6 +275,17 @@ impl X11Display {
 
                                 event_handler.pen_input_event(phase, tool_type, pen_data);
                             }
+
+                            if self.pen_down || self.mouse_down {
+                                let x = device_event.event_x as libc::c_float;
+                                let y = device_event.event_y as libc::c_float;
+
+                                event_handler.mouse_button_down_event(
+                                    crate::MouseButton::Left,
+                                    x,
+                                    y,
+                                );
+                            }
                         }
                     }
                     xi_input::XI_ButtonPress => {
@@ -266,16 +293,10 @@ impl X11Display {
                             .libxi
                             .read_device_event(&mut event.xcookie, self.display)
                         {
-                            // Check if this is a tablet device
-                            if let Some(tablet_device) = self
-                                .tablet_devices
-                                .iter()
-                                .find(|d| d.device_id == device_event.sourceid)
+                            if let Some((pen_data, tool_type)) = try_get_tablet(self, device_event)
                             {
-                                let pen_data = tablet_device.extract_pen_data(&device_event);
-                                let tool_type = tablet_device.get_tool_type();
-
                                 self.pen_in_proximity = true;
+                                self.pen_down = true;
                                 self.last_pen_device_id = device_event.sourceid;
                                 event_handler.pen_input_event(
                                     crate::event::PenPhase::Down,
@@ -283,6 +304,17 @@ impl X11Display {
                                     pen_data,
                                 );
                             }
+
+                            self.mouse_down = true;
+
+                            let btn = keycodes::translate_mouse_button(device_event.detail as _);
+                            let x = device_event.event_x as libc::c_float;
+                            let y = device_event.event_y as libc::c_float;
+
+                            if btn != crate::event::MouseButton::Unknown {
+                                event_handler.mouse_button_down_event(btn, x, y);
+                            }
+                            // }
                         }
                     }
                     xi_input::XI_ButtonRelease => {
@@ -291,18 +323,24 @@ impl X11Display {
                             .read_device_event(&mut event.xcookie, self.display)
                         {
                             // Check if this is a tablet device
-                            if let Some(tablet_device) = self
-                                .tablet_devices
-                                .iter()
-                                .find(|d| d.device_id == device_event.sourceid)
+                            if let Some((pen_data, tool_type)) = try_get_tablet(self, device_event)
                             {
-                                let pen_data = tablet_device.extract_pen_data(&device_event);
-                                let tool_type = tablet_device.get_tool_type();
+                                self.pen_down = false;
                                 event_handler.pen_input_event(
                                     crate::event::PenPhase::Up,
                                     tool_type,
                                     pen_data,
                                 );
+                            }
+
+                            self.mouse_down = false;
+
+                            let btn = keycodes::translate_mouse_button(device_event.detail as _);
+                            let x = device_event.event_x as libc::c_float;
+                            let y = device_event.event_y as libc::c_float;
+
+                            if btn != crate::event::MouseButton::Unknown {
+                                event_handler.mouse_button_up_event(btn, x, y);
                             }
                         }
                     }
@@ -312,13 +350,8 @@ impl X11Display {
                             .read_device_event(&mut event.xcookie, self.display)
                         {
                             // Check if this is a tablet device
-                            if let Some(tablet_device) = self
-                                .tablet_devices
-                                .iter()
-                                .find(|d| d.device_id == device_event.sourceid)
+                            if let Some((pen_data, tool_type)) = try_get_tablet(self, device_event)
                             {
-                                let pen_data = tablet_device.extract_pen_data(&device_event);
-                                let tool_type = tablet_device.get_tool_type();
                                 self.pen_in_proximity = true;
                                 self.last_pen_device_id = device_event.sourceid;
                                 event_handler.pen_input_event(
@@ -335,14 +368,10 @@ impl X11Display {
                             .read_device_event(&mut event.xcookie, self.display)
                         {
                             // Check if this is a tablet device
-                            if let Some(tablet_device) = self
-                                .tablet_devices
-                                .iter()
-                                .find(|d| d.device_id == device_event.sourceid)
+                            if let Some((pen_data, tool_type)) = try_get_tablet(self, device_event)
                             {
-                                let pen_data = tablet_device.extract_pen_data(&device_event);
-                                let tool_type = tablet_device.get_tool_type();
                                 self.pen_in_proximity = false;
+                                self.pen_down = false;
                                 event_handler.pen_input_event(
                                     crate::event::PenPhase::Leave,
                                     tool_type,
@@ -815,6 +844,8 @@ where
             tablet_devices: Vec::new(),
             pen_in_proximity: false,
             last_pen_device_id: -1,
+            pen_down: false,
+            mouse_down: false,
         };
 
         match conf.platform.linux_x11_gl {
