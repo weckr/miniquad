@@ -161,6 +161,10 @@ pub unsafe fn translate_mouse_button(button: i32) -> MouseButton {
         1 => MouseButton::Left,
         2 => MouseButton::Middle,
         3 => MouseButton::Right,
+        4 => MouseButton::ScrollUp,
+        5 => MouseButton::ScrollDown,
+        6 => MouseButton::ScrollLeft,
+        7 => MouseButton::ScrollRight,
         _ => MouseButton::Unknown,
     }
 }

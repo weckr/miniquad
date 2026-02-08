@@ -16,7 +16,7 @@ use crate::{
         linux_x11::xi_input::{TabletDevice, XIDeviceEvent},
         module, NativeDisplayData, Request,
     },
-    CursorIcon, PenInput, PenToolType,
+    CursorIcon, MouseButton, PenInput, PenToolType,
 };
 
 use libx11::*;
@@ -312,7 +312,26 @@ impl X11Display {
                             let y = device_event.event_y as libc::c_float;
 
                             if btn != crate::event::MouseButton::Unknown {
-                                event_handler.mouse_button_down_event(btn, x, y);
+                                match btn {
+                                    MouseButton::Left
+                                    | MouseButton::Middle
+                                    | MouseButton::Right => {
+                                        event_handler.mouse_button_down_event(btn, x, y)
+                                    }
+                                    MouseButton::ScrollDown => {
+                                        event_handler.mouse_wheel_event(0.0, -1.0)
+                                    }
+                                    MouseButton::ScrollLeft => {
+                                        event_handler.mouse_wheel_event(-1.0, 0.0)
+                                    }
+                                    MouseButton::ScrollRight => {
+                                        event_handler.mouse_wheel_event(1.0, 0.0)
+                                    }
+                                    MouseButton::ScrollUp => {
+                                        event_handler.mouse_wheel_event(0.0, 1.0)
+                                    }
+                                    MouseButton::Unknown => (),
+                                }
                             }
                             // }
                         }

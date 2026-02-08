@@ -4,6 +4,10 @@ pub enum MouseButton {
     Left = 0,
     Middle = 1,
     Right = 2,
+    ScrollUp = 3,
+    ScrollDown = 4,
+    ScrollLeft = 5,
+    ScrollRight = 6,
     Unknown = 255,
 }
 
