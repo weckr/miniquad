@@ -333,7 +333,6 @@ impl X11Display {
                                     MouseButton::Unknown => (),
                                 }
                             }
-                            // }
                         }
                     }
                     xi_input::XI_ButtonRelease => {
@@ -846,7 +845,7 @@ where
         (libx11.XkbSetDetectableAutoRepeat)(x11_display, true as _, std::ptr::null_mut());
 
         libx11.load_extensions(x11_display);
-        let display = X11Display {
+        let mut display = X11Display {
             empty_cursor: x_cursor::create_empty_cursor(x11_display, x11_root, &mut libx11),
             display: x11_display,
             root: x11_root,
